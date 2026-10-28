@@ -12,6 +12,15 @@ something that smells familiar. (Entries date from when Jot lived inside the Gla
 
 ---
 
+> **A new repository silently has no author identity — and Git invents one** *(Jot · 2026-10-28)*
+> **Problem:** `git config user.name` printed nothing in a freshly initialised repo (a `&&` chain stopped there without an error), and a commit made
+> without a configured identity is stamped with an address derived from the machine's hostname, which then sits in the public history for good.
+> **Cause:** on this Mac the global Git config holds only credential helpers; the author name and the GitHub noreply address live in each repository's
+> own `.git/config`, so every `git init` or new clone starts with neither.
+> **Fix:** set `user.name` and `user.email` (the GitHub `…@users.noreply.github.com` address) **locally before the first commit**, then check with
+> `git log --format='%an <%ae>'`. Do the same on any other machine you commit from. If a hostname-style address slips in, fix it while the repository is
+> still private; rewriting published history is a separate, deliberate decision.
+
 > **Ad-hoc signing silently drops Accessibility/TCC grants every rebuild** *(Jot · 2026-06-22)*
 > **Problem:** Jot kept losing Accessibility permission (Stickies broke) after every rebuild.
 > **Cause:** macOS keys TCC grants to the code signature; an ad-hoc signature's cdhash changes on

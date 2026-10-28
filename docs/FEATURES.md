@@ -102,3 +102,7 @@
 - **2.0** — Live markdown styling; size dropdown + ⌘±; Stickies create‑and‑paste; “Paste Clipboard”;
   square window; tiny scrolling action bar; side panel hidden by default.
 - **1.x** — Action‑bar export targets, huge‑text editor, Notion integration, editable background.
+
+**Roadmap (ideas, not commitments)**
+- Send a note to a specific open Notes or Stickies window; iCloud sync of notes; insert content from a search.
+- Deferred past 3.0: Light/Auto appearance, an update mechanism, rendered tables, wikilinks and images, drawn checkboxes, quote bars / rules / code-fence fills, a shared editor pane for the pad and note windows, reminder popover polish, optional macOS 26 glass.

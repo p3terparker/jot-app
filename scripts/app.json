@@ -1,0 +1,13 @@
+{
+  "name": "Jot",
+  "frameworks": [
+    "Cocoa",
+    "Carbon",
+    "ServiceManagement",
+    "ApplicationServices",
+    "UserNotifications"
+  ],
+  "minimum_macos": "13.0",
+  "swift_version": "5",
+  "entitlements": "Jot.entitlements"
+}

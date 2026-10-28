@@ -1,0 +1,55 @@
+Jot 3.0 — start here
+
+INSTALL
+1. Drag Jot.app onto Applications.
+2. Eject this disk image, then open Jot from Applications.
+3. Jot lives in your menu bar. Click its icon or press Option-Command-J.
+   Your first note shows what Jot can do.
+
+This preview is not notarized by Apple. If macOS blocks the first launch,
+open System Settings > Privacy & Security and look for Open Anyway after trying
+to open Jot. Approve only the copy you received from a trusted source.
+If that option is unavailable, ask for a signed/notarized installer.
+No Terminal commands or disabling system security are required by Jot.
+
+WRITING
+Open Jot and type. Notes save as you go. Notes use Markdown: # headings,
+**bold**, *italic*, lists, [ ] checklists, links and tables look formatted while
+you type. The Aa button shows a formatting bar; Command-/ shows the plain
+Markdown. The list button opens your notes: search them, pin them, drag to
+reorder, or press Command-Shift-Delete to delete one (Undo is offered).
+Deleted notes stay in Recently Deleted for 30 days.
+
+SENDING A NOTE
+The Share menu sends the open note to Apple Notes or Stickies, saves it as text,
+Markdown, rich text, HTML or PDF, opens the system Share sheet, or copies it.
+- Apple Notes asks once for Automation permission.
+- Stickies needs Accessibility permission for Jot (System Settings > Privacy &
+  Security > Accessibility). Without it Jot copies the note, opens Stickies and
+  tells you what to press.
+- Reminders (the bell) need notification permission, which macOS asks for when
+  you set the first one.
+
+YOUR NOTES STAY ON YOUR MAC
+Each note is a plain .md file in
+  ~/Library/Application Support/Jot/Notes
+(the ... menu has Show Notes in Finder). Jot makes no network connections and
+has no account. Back up that folder like any other documents.
+
+SETTINGS
+Open the ... menu > Settings for the shortcut (Option-Command-J for new
+installs; an install that never chose one keeps Control-J), open at login (off
+until you turn it on), font, size, background, formatted or Markdown display,
+spell checking and which Share items to show.
+
+REQUIREMENTS
+macOS 13 or newer. Apple Silicon and Intel are both included. Intel and
+macOS 13 hardware acceptance is still pending.
+
+UPDATES
+Download a newer installer, quit Jot, drag the new app into Applications and
+choose Replace. Your notes and settings stay in place.
+
+UNINSTALL
+Quit Jot and drag it to the Trash. Your notes stay in the folder above until
+you delete them.

@@ -1,0 +1,15 @@
+# Generated binaries, helper downloads and local artifacts
+/build/
+/dist/
+*.app
+*.dmg
+__pycache__/
+*.pyc
+.DS_Store
+# Local credentials and editor overrides
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
+.claude/settings.local.json

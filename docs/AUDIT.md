@@ -13,6 +13,8 @@ The only edits to the code in the move: the isolated-preview flags are now `--jo
 - `./build.sh --universal`, `./check.sh --built --universal` and `./package.sh` pass, including under a macOS sandbox policy that denies reads from the original suite checkout, from the newer GlassKit project folder and from the Watch checkout (a control read of each failed with a permission error, confirming the policy was active). The built binary contains no developer paths.
 - `dist/Jot.dmg` passes `hdiutil verify`; mounted read-only it holds `Jot.app` (universal, `codesign --verify --deep --strict` passes, version 3.0 (30), `com.jacob.jot`), an `Applications` link and a `Read Me.txt` identical to `FIRST_RUN.txt`.
 - `./release.sh --dry-run` prints the eight notarization steps without running any; without credentials it stops before building.
+- A fresh `git clone --no-local` into a path containing spaces, with no build output, passed `./check.sh` (26 tooling tests and 97,623 Swift checks), built, and ran the 247-check walkthrough with a clean working tree afterwards. The repository has no object alternates, tracked symlinks or tracked generated files; its Git history starts with the extraction.
+- Installer: Jot 3.0 (30), 1,863,918 bytes, SHA-256 `9dffc7769af023e406294214f7f56b2e5977244fa220bcb258cdeeb756aca345`. It is a local preview (ad-hoc, not notarized); Gatekeeper rejects it as expected until the release process in `RELEASE.md` is run with a Developer ID.
 
 ### Remaining acceptance boundaries
 

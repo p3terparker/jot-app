@@ -847,7 +847,7 @@ final class SidebarDivider: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard isDraggable else { return }
         let dx = NSEvent.mouseLocation.x - dragStartX
-        onDrag?(max(120, dragStartWidth + dx))
+        onDrag?(dragStartWidth + dx)          // raw: the owner decides what is too narrow (dragging past the left edge closes the sidebar)
     }
 }
 
@@ -1117,9 +1117,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         sep.autoresizingMask = [.height, .maxXMargin]
         sep.currentWidth = { [weak self] in self?.listScroll.frame.width ?? 210 }
         sep.onDrag = { [weak self] w in
-            guard let self = self, self.sidebarDocks else { return }
-            self.sidebarWidth = w
-            Prefs.sidebarWidth = w
+            guard let self = self, self.sidebarDocks, self.sidebarShown else { return }
+            if w < SidebarGeometry.closeDragThreshold { self.hideSidebar(); return }       // dragged all the way to the left: closed (the saved width is untouched)
+            self.sidebarWidth = max(120, w)
+            Prefs.sidebarWidth = self.sidebarWidth
             self.applySidebarVisibility()
         }
         drawerScrim.onClick = { [weak self] in self?.hideSidebar() }

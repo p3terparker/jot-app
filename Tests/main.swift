@@ -536,4 +536,5 @@ do {
     check(rel(at(2025, 12, 31)) == "12/31/25", "relative time: last year uses the short date (\(rel(at(2025, 12, 31))))")
     check(rel(at(2026, 9, 30, 15, 30)) == "3:30 PM", "relative time: a clock slightly ahead is treated as now (\(rel(at(2026, 9, 30, 15, 30))))")
 }
+check(SidebarGeometry.closeDragThreshold < SidebarGeometry.dockWidth(0, window: 800) && SidebarGeometry.closeDragThreshold >= 60, "dragging the divider shut: the threshold sits below the narrowest docked list")
 print("Jot storage, ordering and migration checks: \(checks) passed")

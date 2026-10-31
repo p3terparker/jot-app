@@ -51,3 +51,17 @@ Before public shipping:
 Local builds (`build.sh`, `package.sh`) are unchanged by all of this: ad-hoc or your own stable identity, no hardened runtime unless you pass `--hardened`, not notarized. `./build.sh --hardened` is a useful local smoke test of the release configuration (hardened runtime plus entitlements, ad-hoc signed).
 
 `./check.sh --release --universal` checks a built bundle for Developer ID, hardened runtime and a stapled ticket; it does not obtain credentials or submit anything.
+
+## Testing builds on a Mac without the dmg dance
+
+Every push to a `claude/*` branch runs `.github/workflows/build.yml` on a GitHub Mac: type-check (arm64 and x86_64), `./check.sh`, `./package.sh`, then `./preview.sh` on the universal bundle. If all of that passes, the single **Current build** pre-release (tag `current-build`) is replaced with the new `Jot.dmg` and its SHA-256 (a commit message containing `[no preview]` builds and tests but doesn't publish).
+
+`scripts/jot-update.sh` installs that build: it downloads the disk image with `curl` (so macOS never marks it quarantined and shows no "unidentified developer" dialog), checks the SHA-256, quits Jot, replaces the app where it lives (`/Applications/Jot.app` or `~/Applications/Jot.app`) and opens it again. Notes and settings are in your user folders and stay. It runs only when asked — there is no schedule.
+
+One-time setup on the Mac:
+
+1. Make a folder named after the repository in your home directory (`~/jot-app`) and share it with Claude through Remote Control (Claude desktop app ▸ Settings ▸ Claude Code ▸ Remote Control, or run `claude remote-control` in that folder). That lets a Claude session run the updater on this Mac when a wave of changes is finished.
+2. Optional, for the same command by hand: `echo "alias jot-update='curl -fsSL https://raw.githubusercontent.com/p3terparker/jot-app/main/scripts/jot-update.sh | bash -s --'" >> ~/.zshrc && source ~/.zshrc` — then `jot-update`, `jot-update --dry-run`, `jot-update --force`. (Until this branch is merged to `main`, use the branch name in the URL.)
+3. To stop macOS asking for Accessibility again after each update, create a self-signed **Code Signing** certificate in Keychain Access (see GOTCHAS ▸ Stickies) and put `export JOT_SIGNING_IDENTITY="Your Certificate Name"` in `~/.zshrc`. The updater then re-signs each new copy with it; without it the grant (only the Stickies keystroke path needs it) is lost on every update because CI builds are ad-hoc signed.
+
+This never makes a stable release or notarizes anything: that stays `./release.sh` on your machine, when you decide.

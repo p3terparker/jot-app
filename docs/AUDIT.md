@@ -1,5 +1,9 @@
 # Jot verification
 
+## 2026-10-31 — Jot 3.2 (32): drag the sidebar shut; CI build and updater
+
+`SidebarDivider` now reports the raw drag width and `AppDelegate` closes the docked sidebar (`hideSidebar`) when it falls below `SidebarGeometry.closeDragThreshold` (100 pt) without touching the saved width. New: `.github/workflows/build.yml` (type-check both architectures, `./check.sh`, `./package.sh`, `./preview.sh`, publish the Current build) and `scripts/jot-update.sh` (Mac-side installer; `bash -n` is covered by the existing script syntax check). Like 3.1 these were written without a Swift toolchain; the first CI run is the first compile — record its result here.
+
 ## 2026-10-31 — Jot 3.1 (31): sidebar folders
 
 Scope: group notes in the sidebar under folders (`folder:` frontmatter key; `Sources/Folders.swift`, `NoteLibrary.layout` and friends, row-to-note mapping in `main.swift`/`NoteFilter.swift`/`Sidebar.swift`). The notes folder stays flat; no note is moved, renamed or deleted by any folder operation.

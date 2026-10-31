@@ -1,0 +1,89 @@
+# Builds, tests and packages Jot on GitHub's Mac, so a change can be checked and installed without a local build.
+# A push to a claude/* branch that type-checks, passes the tests and the isolated walkthrough, and packages cleanly
+# replaces the single "Current build" pre-release (tag current-build). scripts/jot-update.sh installs it on the Mac.
+name: Build Jot
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write    # publishing the pre-release
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun swiftc --version
+          /usr/bin/python3 --version
+
+      # Fast feedback: the whole app type-checks for both architectures.
+      - name: Type-check the app
+        run: |
+          xcrun swiftc -typecheck -swift-version 5 -target arm64-apple-macos13.0 Sources/*.swift
+          xcrun swiftc -typecheck -swift-version 5 -target x86_64-apple-macos13.0 Sources/*.swift
+
+      - name: Tooling and regression tests
+        run: ./check.sh
+
+      - name: Build and package (Apple Silicon + Intel)
+        run: ./package.sh
+
+      # The real UI, scripted, against a throwaway home, defaults and notes folder (see Sources/Preview.swift).
+      - name: Isolated walkthrough
+        run: ./preview.sh build/universal/Jot.app build/walkthrough
+
+      - name: Upload walkthrough report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: walkthrough-${{ github.sha }}
+          path: build/walkthrough
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jot-${{ github.sha }}
+          path: dist/Jot.dmg
+          retention-days: 30
+
+      # A commit message containing "[no preview]" (work in progress) is built and tested but not published, so the
+      # current build only changes when an iteration is finished. There is only ever one: it replaces itself.
+      - name: Publish the current build
+        if: (startsWith(github.ref, 'refs/heads/claude/') && !contains(github.event.head_commit.message, '[no preview]')) || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
+          build=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Info.plist)
+          tag="current-build"
+          dmg="dist/Jot.dmg"
+          sha=$(shasum -a 256 "$dmg" | cut -d' ' -f1)
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "The newest build that passed the tests and the walkthrough: Jot ${version} (${build})."
+            echo
+            echo "To install it without a browser download, run scripts/jot-update.sh (see docs/RELEASE.md). It is ad-hoc signed and not notarized."
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            printf '\nBuilt from commit `%s` (%s).\n\nSHA-256 for `Jot.dmg`:\n\n```\n%s\n```\n' \
+              "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" "$sha"
+          } > "$notes"
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" "$dmg" --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Current build: Jot ${version} (${build})" --notes-file "$notes"
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag} (sha256 ${sha})"

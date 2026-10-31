@@ -12,6 +12,7 @@ struct SidebarGeometry {
     static let dockThreshold: CGFloat = 560
     static let minimumTextColumn: CGFloat = 300
     static let drawerMaximum: CGFloat = 280
+    static let closeDragThreshold: CGFloat = 100                // dragging the divider narrower than this closes the docked sidebar
 
     static func drawerWidth(_ saved: CGFloat, window W: CGFloat) -> CGFloat { min(max(200, min(saved, drawerMaximum)), max(200, W - 56)) }
     static func dockWidth(_ saved: CGFloat, window W: CGFloat) -> CGFloat { min(max(180, saved), max(180, W - minimumTextColumn - 4)) }

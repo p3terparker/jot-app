@@ -43,7 +43,14 @@ jobs:
 
       # The real UI, scripted, against a throwaway home, defaults and notes folder (see Sources/Preview.swift).
       - name: Isolated walkthrough
-        run: ./preview.sh build/universal/Jot.app build/walkthrough
+        run: |
+          ./preview.sh build/universal/Jot.app build/walkthrough || {
+            echo "--- failed checks ---"
+            grep -E '^FAILED:' build/walkthrough/walkthrough.txt || true
+            echo "--- stderr (tail) ---"
+            tail -n 30 build/walkthrough/stderr.txt || true
+            exit 1
+          }
 
       - name: Upload walkthrough report
         if: always()

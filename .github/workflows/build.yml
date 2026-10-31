@@ -102,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: 78ea85f
+          ref: 78ea85f851c652c522df2bbcc645437eafeba8e0
       - name: Build the old commit
         run: ./build.sh
       - name: Walkthrough on the old commit

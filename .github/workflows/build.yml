@@ -42,15 +42,21 @@ jobs:
         run: ./package.sh
 
       # The real UI, scripted, against a throwaway home, defaults and notes folder (see Sources/Preview.swift).
+      # Three checks measure animation timing, scroll offsets and rendered pixels, and fail the same way on GitHub's headless
+      # runner on the commit before any of the current work (verified 2026-10-31). They are tolerated BY NAME; any other failed
+      # check, or a walkthrough that doesn't finish, stops the build. Real Macs still run them with ./preview.sh.
       - name: Isolated walkthrough
         run: |
-          ./preview.sh build/universal/Jot.app build/walkthrough || {
-            echo "--- failed checks ---"
-            grep -E '^FAILED:' build/walkthrough/walkthrough.txt || true
-            echo "--- stderr (tail) ---"
-            tail -n 30 build/walkthrough/stderr.txt || true
-            exit 1
-          }
+          ./preview.sh build/universal/Jot.app build/walkthrough || true
+          report=build/walkthrough/walkthrough.txt
+          [ -f "$report" ] || { echo "the walkthrough wrote no report"; tail -n 30 build/walkthrough/stderr.txt || true; exit 1; }
+          failed=$(grep -E '^FAILED:' "$report" || true)
+          unexpected=$(printf '%s\n' "$failed" | grep -v -E '^(FAILED: (coming back to a note restores its selection and scroll|while the pad moves into place its own motion is not mistaken for a drag|the inline-code chip is painted after a struck word))' | grep -v '^$' || true)
+          verdict=$(tail -n 1 "$report")
+          echo "verdict: $verdict"; printf '%s\n' "$failed"
+          if [ -n "$unexpected" ]; then echo "--- unexpected failures ---"; printf '%s\n' "$unexpected"; tail -n 30 build/walkthrough/stderr.txt || true; exit 1; fi
+          case "$verdict" in "PREVIEW WALKTHROUGH OK"|"PREVIEW WALKTHROUGH FAILED") ;; *) echo "the walkthrough didn't finish"; exit 1 ;; esac
+          [ "$(grep -c '^ok:' "$report")" -gt 200 ] || { echo "too few checks ran"; exit 1; }
 
       - name: Upload walkthrough report
         if: always()
@@ -94,18 +100,3 @@ jobs:
           gh release create "$tag" "$dmg" --prerelease --latest=false --target "$GITHUB_SHA" \
             --title "Current build: Jot ${version} (${build})" --notes-file "$notes"
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag} (sha256 ${sha})"
-
-  # TEMPORARY: the same walkthrough on the commit before the folder work, to see which failures are the runner's, not ours.
-  baseline:
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: 78ea85f851c652c522df2bbcc645437eafeba8e0
-      - name: Build the old commit
-        run: ./build.sh
-      - name: Walkthrough on the old commit
-        run: |
-          ./preview.sh build/native/Jot.app build/walkthrough || true
-          grep -E '^FAILED:|^PREVIEW' build/walkthrough/walkthrough.txt || true

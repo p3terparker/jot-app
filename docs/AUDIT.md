@@ -1,5 +1,11 @@
 # Jot verification
 
+## 2026-10-31 — Jot 3.1 (31): sidebar folders
+
+Scope: group notes in the sidebar under folders (`folder:` frontmatter key; `Sources/Folders.swift`, `NoteLibrary.layout` and friends, row-to-note mapping in `main.swift`/`NoteFilter.swift`/`Sidebar.swift`). The notes folder stays flat; no note is moved, renamed or deleted by any folder operation.
+
+**Verification status — read this:** the change was written in a Linux container with no Swift toolchain or macOS, so it was **not compiled and none of the checks below have been run**. Before relying on 3.1 on the Mac, run `./check.sh` (adds the "folders" block to `Tests/main.swift`: frontmatter round-trip and quoting, name cleaning, layout with/without folders and collapsed, drop targets, reordering) and `./preview.sh` (adds walkthrough step 04f: header rows, selection, fold, filing, rename, remove; the ⋯ menu expectation now lists "Move to Folder"), then record the counts here. Manual checks still owed: dragging a note onto a header and between groups with a real mouse, right-click on a header / empty space, VoiceOver on a header, click-to-fold, Undo toasts.
+
 ## 2026-10-28 — Jot 3.0 (30): standalone extraction
 
 Jot now has its own repository: root `Sources/` and `Tests/`, a dedicated `scripts/jot_build.py` (build · check · package · release), app-only metadata (`scripts/app.json`, `Info.plist`, `Jot.entitlements`), its own documentation and the MIT license. It was extracted from the GlassKit suite checkout together with the Jot 3.0 work that was still uncommitted there. No sibling source trees, suite build scripts, credentials, notes, preferences or prior Git history are included; this repository's history starts with the extraction. Behavior, the bundle ID (`com.jacob.jot`), preference keys, the notes folder and the shortcut defaults are unchanged.

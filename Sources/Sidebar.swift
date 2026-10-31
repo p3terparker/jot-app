@@ -47,13 +47,20 @@ final class DrawerBackdrop: NSView {
     override func mouseDown(with event: NSEvent) {}      // a click on the drawer's own background does nothing (and must not drag the window)
 }
 
-// The notes list. A single plain click on a row reports itself, so a drawer can close after you pick a note — but not after
+// The notes list. (A click on a folder's header folds it.) A single plain click on a row reports itself, so a drawer can close after you pick a note — but not after
 // a drag-reorder, a ⌘/⇧ multi-select or an arrow-key walk through the list.
 final class NoteTableView: NSTableView {
     var onUserPick: ((Int) -> Void)?
     // Esc with the list focused: close the drawer (or hide the pad). The table view doesn't pass Esc up to the app by itself.
     override func cancelOperation(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.escape() }
     override func mouseDown(with event: NSEvent) {
+        // A click on a folder's header folds or unfolds it (the header is not selectable, so the table itself would do nothing).
+        // Control-click is the context menu, which the table handles.
+        let hit = row(at: convert(event.locationInWindow, from: nil))
+        if hit >= 0, !event.modifierFlags.contains(.control), let app = NSApp.delegate as? AppDelegate, app.folderName(atRow: hit) != nil {
+            if event.clickCount == 1 { app.toggleFolder(atRow: hit) }
+            return
+        }
         let start = event.locationInWindow
         super.mouseDown(with: event)                               // tracks the click (or the drag) to its end
         guard event.clickCount == 1, event.modifierFlags.intersection([.command, .shift, .control]).isEmpty,

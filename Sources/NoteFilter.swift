@@ -2,25 +2,36 @@ import Cocoa
 
 // ============================================================================
 // NoteFilter — the search field above the notes list (⌥⌘F). It filters the list by title AND body, ignoring case and accents
-// ("resume" finds "Résumé"), as you type. `allNotes` is the full sorted list; `notes` — the array every row index refers
-// to — is what passes the filter, so the table, selection and delete code stay as they were. Reordering is off while filtering
-// (a position in a partial list means nothing).
+// ("resume" finds "Résumé"), as you type. `allNotes` is the whole library in display order; `notes` is what has a row. While a
+// filter is active the list is FLAT — matches only, no folder headers, folded-shut folders searched too — and reordering is off
+// (a position in a partial list means nothing). Without a filter the rows are the folders' layout (Folders.swift).
 //   Esc clears the field (a second Esc closes the drawer / pad) · Return opens the first match · ↓ moves into the list.
 // ============================================================================
 extension AppDelegate {
     var isFiltering: Bool { !filterText.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    // Re-list the notes from disk, sorted, then apply the filter.
+    // Re-list the notes from disk, lay them out into folders, then apply the filter.
     func rebuildNotes() {
-        allNotes = sortNotes(store.all())
-        setNotes(filteredNotes(allNotes))
+        layout = NoteLibrary.layout(store.all().map { noteEntry($0) }, folderOrder: Prefs.folderOrder, collapsed: collapsedFolderSet)
+        allNotes = layout.all
+        applyFilter()
         updateFilterEmptyState()
     }
-    // Swaps in a new `notes` array and brings the table up to date: rows slide in and out when the sidebar is on screen (so the
+    // The rows for the current filter: the folder layout, or — while searching — the flat list of matches.
+    func applyFilter() {
+        if isFiltering {
+            let hits = filteredNotes(allNotes)
+            setSidebar(items: hits.map { SidebarItem.note($0) }, notes: hits)
+        } else {
+            setSidebar(items: layout.items, notes: layout.notes)
+        }
+    }
+    // Swaps in new rows and brings the table up to date: rows slide in and out when the sidebar is on screen (so the
     // list keeps its scroll position and selection), a plain reload otherwise.
-    func setNotes(_ new: [URL]) {
-        let old = notes
-        notes = new
+    func setSidebar(items new: [SidebarItem], notes newNotes: [URL]) {
+        let old = sidebarItems
+        sidebarItems = new
+        notes = newNotes
         guard !viewingTrash, sidebarShown, dropdown?.isVisible == true, animatesSidebar, tableView.numberOfRows == old.count,
               let diff = ListDiff.compute(old: old, new: new) else {
             tableView.reloadData(); return
@@ -31,7 +42,7 @@ extension AppDelegate {
             if !diff.inserted.isEmpty { tableView.insertRows(at: IndexSet(diff.inserted), withAnimation: [.effectFade, .slideDown]) }
             tableView.endUpdates()
         }
-        let kept = IndexSet(new.indices).subtracting(IndexSet(diff.inserted))             // rows that stayed may show a new title or time
+        let kept = IndexSet(new.indices).subtracting(IndexSet(diff.inserted))             // rows that stayed may show a new title, time or folder count
         if !kept.isEmpty { tableView.reloadData(forRowIndexes: kept, columnIndexes: IndexSet(integer: 0)) }
     }
     func filteredNotes(_ all: [URL]) -> [URL] {
@@ -50,8 +61,8 @@ extension AppDelegate {
     @objc func filterChanged(_ sender: NSSearchField) {
         filterText = sender.stringValue
         let keep = current
-        setNotes(filteredNotes(allNotes))
-        if let c = keep, let row = notes.firstIndex(of: c) { tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        applyFilter()
+        if let c = keep, let row = rowIndex(of: c) { tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         updateFilterEmptyState()
     }
     func clearFilter() {

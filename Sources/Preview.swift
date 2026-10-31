@@ -253,14 +253,15 @@ final class PreviewWalkthrough {
             let menuTitles = (a.shareMenu(anchor: a.shareButton).items.map { $0.title })
             self.expect(menuTitles == ["Apple Notes", "Stickies", "", "Save As", "Share…", "Copy as Text"], "the Share menu holds every destination: \(menuTitles)")
             let moreTitles = a.noteActionsMenu().items.map { $0.title }.filter { !$0.isEmpty }
-            self.expect(moreTitles == ["Keep on Top", "Remind Me…", "New Note from Clipboard", "Open in New Window", "Delete Note", "Recently Deleted", "Show Notes in Finder", "Settings…", "About Jot", "Quit Jot"],
+            self.expect(moreTitles == ["Keep on Top", "Remind Me…", "New Note from Clipboard", "Open in New Window", "Move to Folder", "Delete Note", "Recently Deleted", "Show Notes in Finder", "Settings…", "About Jot", "Quit Jot"],
                         "the ⋯ menu holds the occasional actions: \(moreTitles)")
             self.expect(a.pinButton?.isHidden == true && a.reminderButton?.isHidden == true, "pin and reminder badges are hidden until they apply")
             // Every SF Symbol the UI names must exist on this macOS (a missing one is an invisible button).
             let names = ["arrow.up.right.square", "sidebar.left", "textformat", "bell", "pin", "ellipsis", "square.and.pencil", "trash.circle",
                          "number", "bold", "italic", "list.bullet", "list.number", "checkmark.square", "tablecells", "text.quote", "link",
                          "arrow.counterclockwise", "doc.text", "doc.plaintext", "circle.fill", "pin.fill", "trash", "bell.fill", "arrow.up.forward",
-                         "square.and.arrow.down", "square.and.arrow.up", "doc.on.doc", "macwindow", "doc.on.clipboard", "gearshape"]
+                         "square.and.arrow.down", "square.and.arrow.up", "doc.on.doc", "macwindow", "doc.on.clipboard", "gearshape",
+                         "folder", "folder.badge.plus", "folder.badge.minus", "chevron.right", "chevron.down", "pencil"]
             let missing = names.filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil }
             self.expect(missing.isEmpty, "all \(names.count) SF Symbols used by the UI exist on this macOS" + (missing.isEmpty ? "" : ": missing \(missing)"))
             self.auditAccessibility(a.dropdown.contentView!, label: "pad")
@@ -409,6 +410,72 @@ final class PreviewWalkthrough {
             self.expect(many.contains("Delete 3 Notes") && many.contains("Open 3 in New Windows") && !many.contains("Remind Me…"), "a multi-selection says how many it acts on and drops single-note items: \(many)")
             let tableMenu = a.tableView.menu
             self.expect(tableMenu?.delegate === a, "the list's menu is filled in when it opens")
+        }
+
+        // --- 04f folders: file a note under a header, fold it, drag between groups, rename, remove (a scratch note; the fixtures stay put) ----------------
+        var folderScratch: URL!
+        add(0.2) {
+            a.rebuildNotes(); a.tableView.reloadData()
+            let isHeader: (SidebarItem) -> Bool = { if case .folder = $0 { return true } else { return false } }
+            self.expect(Prefs.folderOrder.isEmpty && !a.sidebarItems.contains(where: isHeader) && a.sidebarItems.count == a.notes.count, "with no folders the list is just the notes — no headers, no change")
+            let u = try! a.store.create(); try! "# Filed by the walkthrough\nbody".write(to: u, atomically: true, encoding: .utf8)
+            folderScratch = u
+            a.rebuildNotes(); a.tableView.reloadData()
+            a.moveNotes([u], toFolder: "  Walk \"Folder\" ")
+            self.expect(a.store.readMeta(u).folder == "Walk 'Folder'" && Prefs.folderOrder == ["Walk 'Folder'"], "filing a note writes folder: (name cleaned) and remembers the folder: \(Prefs.folderOrder)")
+            self.expect(a.store.readRaw(u).contains("folder: \"Walk 'Folder'\""), "the folder is stored quoted in the note's frontmatter")
+            let n = a.sidebarItems.count
+            self.expect(n >= 2 && a.folderName(atRow: n - 2) == "Walk 'Folder'" && a.noteURL(atRow: n - 1)?.lastPathComponent == u.lastPathComponent, "the folder's header sits above its note, after the unfiled notes")
+            self.expect(a.tableView.numberOfRows == n, "the table has a row per header and per note (\(a.tableView.numberOfRows) rows)")
+            self.expect(!a.tableView(a.tableView, shouldSelectRow: n - 2) && a.tableView(a.tableView, shouldSelectRow: n - 1), "a header can't be selected; its note can")
+            self.expect(a.tableView(a.tableView, heightOfRow: n - 2) == JotUI.folderRowHeight && a.tableView(a.tableView, heightOfRow: n - 1) == a.tableView.rowHeight, "a header row is shorter than a note row")
+            let cell = a.tableView(a.tableView, viewFor: nil, row: n - 2) as? FolderHeaderCell
+            self.expect(cell?.accessibilityLabel() == "Walk 'Folder' folder, 1 note, expanded", "a header is read as one phrase: \(String(describing: cell?.accessibilityLabel()))")
+            let headerTitles: (String) -> [String] = { name in let m = NSMenu(); a.populateFolderMenu(m, folder: name); return m.items.map { $0.title }.filter { !$0.isEmpty } }
+            self.expect(headerTitles("Walk 'Folder'") == ["Collapse", "Rename Folder…", "Remove Folder", "New Folder…"], "a header's menu: \(headerTitles("Walk 'Folder'"))")
+            let sub = a.folderSubmenu(for: [u]).items.map { $0.title }.filter { !$0.isEmpty }
+            self.expect(sub == ["Walk 'Folder'", "New Folder…", "Remove from Folder"], "Move to Folder lists the folders, New Folder…, and Remove from Folder for a filed note: \(sub)")
+            let empty = NSMenu(); a.populateListMenu(empty, rows: [])
+            self.expect(empty.items.map { $0.title } == ["New Folder…"], "right-clicking empty space offers New Folder…")
+        }
+        add(0.2) {
+            let u = folderScratch!
+            a.setFolder("Walk 'Folder'", collapsed: true)
+            self.expect(!a.notes.contains { $0.lastPathComponent == u.lastPathComponent } && a.allNotes.contains { $0.lastPathComponent == u.lastPathComponent }
+                        && a.sidebarItems.last == .folder("Walk 'Folder'") && a.layout.counts["Walk 'Folder'"] == 1, "folding a folder hides its notes but keeps the header, its count, and the note in allNotes")
+            self.expect(a.tableView.numberOfRows == a.sidebarItems.count, "…and the table follows (\(a.tableView.numberOfRows) rows)")
+            a.toggleFolder(atRow: a.sidebarItems.count - 1)
+            self.expect(a.notes.contains { $0.lastPathComponent == u.lastPathComponent } && Prefs.collapsedFolders.isEmpty, "unfolding brings the note back")
+            a.setFolder("Walk 'Folder'", collapsed: true)
+            a.dropNote(u, onto: .into("Walk 'Folder'"))
+            self.expect(Prefs.collapsedFolders.isEmpty && a.store.readMeta(u).folder == "Walk 'Folder'", "filing into a folded folder opens it")
+        }
+        add(0.2) {
+            let u = folderScratch!
+            a.moveNotes([u], toFolder: "")
+            self.expect(a.store.readMeta(u).folder.isEmpty && a.notes.first(where: { $0.lastPathComponent == u.lastPathComponent }).flatMap { a.rowIndex(of: $0) }.map { NoteLibrary.folder(atRow: $0, in: a.sidebarItems).isEmpty } == true, "Remove from Folder puts the note back among the unfiled ones")
+            self.expect(a.tableView.numberOfRows == a.sidebarItems.count, "the empty folder stays as a header (\(a.tableView.numberOfRows) rows)")
+            self.expect(Array(a.sidebarItems.suffix(1)) == [.folder("Walk 'Folder'")] && a.layout.counts["Walk 'Folder'"] == 0, "…with no notes in it")
+            let found = NoteLibrary.dropTarget(row: a.sidebarItems.count - 1, onRow: true, items: a.sidebarItems, collapsed: [])
+            self.expect(found == .into("Walk 'Folder'"), "dropping on that header files into it")
+            if let found = found { a.dropNote(u, onto: found) }
+            self.expect(a.store.readMeta(u).folder == "Walk 'Folder'", "…and does")
+        }
+        add(0.2) {
+            let u = folderScratch!
+            a.renameFolder("Walk 'Folder'", to: "Renamed")
+            self.expect(a.store.readMeta(u).folder == "Renamed" && Prefs.folderOrder == ["Renamed"] && a.layout.folders == ["Renamed"], "renaming a folder renames it on every note in it and in the folder list")
+            a.renameFolder("Renamed", to: "renamed")
+            self.expect(Prefs.folderOrder == ["renamed"] && a.store.readMeta(u).folder == "renamed", "a rename that only changes case is allowed")
+            a.createFolder("RENAMED")
+            self.expect(Prefs.folderOrder == ["renamed"], "a new folder can't share a name (ignoring case) with an existing one")
+            a.removeFolder("renamed")
+            self.expect(a.store.readMeta(u).folder.isEmpty && Prefs.folderOrder.isEmpty && !a.sidebarItems.contains(where: { if case .folder = $0 { return true } else { return false } }),
+                        "removing a folder unfiles its notes (none deleted) and the list is plain again")
+            self.expect(FileManager.default.fileExists(atPath: u.path), "…the note itself is still there")
+            try? FileManager.default.removeItem(at: u)
+            a.infoCache[u] = nil
+            a.rebuildNotes(); a.tableView.reloadData()
         }
 
         // --- 05 small window ------------------------------------------------------------------------

@@ -153,6 +153,93 @@ check(afterDrag.first == "brand-new", "A note created after a drag must sort abo
 // Equal keys fall back to the path, so the list never shuffles between launches.
 check(names(NoteLibrary.sorted([entry("z", age: 1), entry("a", age: 1)])) == ["a", "z"], "Ties must break deterministically")
 
+// ---- folders: the `folder:` key, names, layout, drops -------------------------------------------------------------------------------
+do {
+    let fs = makeStore("folders")
+    // The key round-trips, is written quoted, and keeps every other line (Obsidian tags, comments) in place.
+    let filed = try createNote(fs, "---\ntags: [a, b]\n# keep me\n---\nBody\n")
+    var fm0 = fs.readMeta(filed)
+    check(fm0.folder.isEmpty, "a note without the key is not in a folder")
+    fm0.folder = "Work: 2026"
+    _ = fs.writeMeta(fm0, to: filed)
+    check(fs.readRaw(filed) == "---\ntags: [a, b]\n# keep me\nfolder: \"Work: 2026\"\n---\nBody\n", "folder is appended quoted, other lines untouched; got \(fs.readRaw(filed).debugDescription)")
+    check(fs.readMeta(filed).folder == "Work: 2026" && fs.read(filed) == "Body\n", "folder reads back and the body is untouched")
+    try fs.saveExisting("Edited\n", to: filed)
+    check(fs.readMeta(filed).folder == "Work: 2026", "an autosave keeps the folder")
+    var cleared = fs.readMeta(filed); cleared.folder = ""
+    _ = fs.writeMeta(cleared, to: filed)
+    check(fs.readRaw(filed) == "---\ntags: [a, b]\n# keep me\n---\nEdited\n", "taking a note out of its folder drops only that line")
+    // Hand-written spellings (unquoted, single-quoted) are read; a note filed in a folder is never swept as blank.
+    let hand = try createNote(fs, "---\nfolder: Ideas\n---\n")
+    let single = try createNote(fs, "---\nfolder: 'Reading list'\n---\n")
+    check(fs.readMeta(hand).folder == "Ideas" && fs.readMeta(single).folder == "Reading list", "folder: reads plain and single-quoted values")
+    check(!fs.isUndecoratedBlank(hand), "an empty note that sits in a folder is not a stray blank note")
+    // Unchanged lines keep the author's spelling.
+    var same = fs.readMeta(hand); same.pin = true
+    _ = fs.writeMeta(same, to: hand)
+    check(fs.readRaw(hand).contains("folder: Ideas\n"), "an untouched folder line keeps its spelling")
+
+    check(FolderNames.clean("  Work \"A\"\\B\n") == "Work 'A'/B", "names lose quotes, backslashes and line breaks: \(FolderNames.clean("  Work \"A\"\\B\n"))")
+    check(FolderNames.clean("   ").isEmpty && FolderNames.clean("\n\t").isEmpty, "a blank name is no name")
+    check(FolderNames.clean(String(repeating: "x", count: 100)).count == FolderNames.maxLength, "names are capped")
+    check(FolderNames.existing("work", in: ["Home", "Work"]) == "Work" && FolderNames.existing("café", in: ["Cafe"]) == "Cafe" && FolderNames.existing("x", in: ["Home"]) == nil,
+          "a typed name finds the existing folder ignoring case and accents")
+
+    func fe(_ name: String, folder: String = "", pin: Bool = false, order: Int = 0, age: TimeInterval) -> NoteLibrary.Entry {
+        NoteLibrary.Entry(url: URL(fileURLWithPath: "/notes/\(name).md"), pin: pin, order: order, modified: Date(timeIntervalSince1970: 1_000_000 - age), folder: folder)
+    }
+    func label(_ items: [SidebarItem]) -> [String] {
+        items.map { item in
+            switch item {
+            case .folder(let n): return "[\(n)]"
+            case .note(let u): return u.deletingPathExtension().lastPathComponent
+            }
+        }
+    }
+    let entries = [
+        fe("loose-old", age: 50), fe("loose-new", age: 5),
+        fe("w-old", folder: "Work", age: 40), fe("w-pinned", folder: "Work", pin: true, age: 90), fe("w-new", folder: "Work", age: 3),
+        fe("h-1", folder: "Home", age: 10),
+        fe("stray", folder: "Zed", age: 20),
+    ]
+    let lay = NoteLibrary.layout(entries, folderOrder: ["Work", "Home", "Empty"], collapsed: [])
+    check(label(lay.items) == ["loose-new", "loose-old", "[Work]", "w-pinned", "w-new", "w-old", "[Home]", "h-1", "[Empty]", "[Zed]", "stray"],
+          "unfiled notes lead; folders follow in creation order (unknown ones alphabetically), pins first within a folder; got \(label(lay.items))")
+    check(lay.counts["Work"] == 3 && lay.counts["Empty"] == 0 && lay.folders == ["Work", "Home", "Empty", "Zed"], "counts and folder order")
+    check(names(lay.notes) == names(lay.all) && lay.notes.count == 7, "with nothing collapsed every note has a row")
+    let shut = NoteLibrary.layout(entries, folderOrder: ["Work", "Home", "Empty"], collapsed: ["Work", "Ghost"])
+    check(label(shut.items) == ["loose-new", "loose-old", "[Work]", "[Home]", "h-1", "[Empty]", "[Zed]", "stray"], "a collapsed folder keeps its header but lists no notes; got \(label(shut.items))")
+    check(shut.counts["Work"] == 3 && shut.all.count == 7 && shut.notes.count == 4, "collapsed notes still count and still belong to `all`")
+    let plain = NoteLibrary.layout([fe("a", age: 2), fe("b", age: 1)], folderOrder: [], collapsed: [])
+    check(label(plain.items) == ["b", "a"] && plain.notes == plain.all && plain.folders.isEmpty, "with no folders the layout is the plain sorted list")
+    check(NoteLibrary.layout([], folderOrder: [], collapsed: []).items.isEmpty, "an empty library has no rows")
+
+    let items = lay.items          // 0 loose-new 1 loose-old 2 [Work] 3 w-pinned 4 w-new 5 w-old 6 [Home] 7 h-1 8 [Empty] 9 [Zed] 10 stray
+    func url(_ n: String) -> URL { URL(fileURLWithPath: "/notes/\(n).md") }
+    check(NoteLibrary.folder(atRow: 0, in: items) == "" && NoteLibrary.folder(atRow: 2, in: items) == "Work" && NoteLibrary.folder(atRow: 5, in: items) == "Work" && NoteLibrary.folder(atRow: 7, in: items) == "Home",
+          "a row belongs to the nearest header above it")
+    check(names(NoteLibrary.notes(inFolder: "Work", items: items)) == ["w-pinned", "w-new", "w-old"] && names(NoteLibrary.notes(inFolder: "", items: items)) == ["loose-new", "loose-old"]
+          && NoteLibrary.notes(inFolder: "Empty", items: items).isEmpty, "notes(inFolder:) lists a group top to bottom")
+
+    typealias T = NoteLibrary.DropTarget
+    func drop(_ row: Int, on: Bool = false, collapsed: Set<String> = []) -> T? { NoteLibrary.dropTarget(row: row, onRow: on, items: items, collapsed: collapsed) }
+    check(drop(6, on: true) == .into("Home") && drop(8, on: true) == .into("Empty"), "dropping on a header files the note there")
+    check(drop(4, on: true) == .group("Work", before: url("w-new")), "dropping on a note row counts as dropping above it")
+    check(drop(0) == .group("", before: url("loose-new")), "above the first row is the top of the unfiled notes")
+    check(drop(4) == .group("Work", before: url("w-new")) && drop(7) == .group("Home", before: url("h-1")), "between notes: that group, before the note below")
+    check(drop(2) == .group("", before: nil), "the gap above the first header is the end of the unfiled notes")
+    check(drop(6) == .group("Work", before: nil), "the gap above a header is the end of the group above")
+    check(drop(11) == .group("Zed", before: nil), "below the last row is the end of the last group")
+    check(drop(6, collapsed: ["Work"]) == .into("Work") && drop(6, on: true, collapsed: ["Home"]) == .into("Home"), "a collapsed folder takes the note without a position")
+    check(NoteLibrary.dropTarget(row: 0, onRow: false, items: [], collapsed: []) == .group("", before: nil) && drop(-1) == nil, "empty list and bad rows")
+
+    let w = NoteLibrary.notes(inFolder: "Work", items: items)
+    check(names(NoteLibrary.reordered(w, moving: url("w-old"), before: url("w-pinned"))) == ["w-old", "w-pinned", "w-new"], "move up")
+    check(names(NoteLibrary.reordered(w, moving: url("w-pinned"), before: nil)) == ["w-new", "w-old", "w-pinned"], "move to the end")
+    check(names(NoteLibrary.reordered(w, moving: url("w-new"), before: url("w-new"))) == names(w), "dropping on your own gap changes nothing")
+    check(names(NoteLibrary.reordered(w, moving: url("loose-old"), before: url("w-new"))) == ["w-pinned", "loose-old", "w-new", "w-old"], "a note from another group slots in")
+}
+
 // Filtering: every term must match, case- and diacritic-insensitively, in title or body.
 check(NoteLibrary.matches("Café notes\nbuy croissants", query: "cafe"), "Diacritics must not matter")
 check(NoteLibrary.matches("Meeting NOTES", query: "notes meeting"), "Terms match in any order, any case")

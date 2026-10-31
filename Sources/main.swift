@@ -48,6 +48,9 @@ enum Prefs {
     static var hasShownWelcome: Bool { get { d.bool(forKey: "hasShownWelcome") } set { d.set(newValue, forKey: "hasShownWelcome") } }
     // Formatted (live preview: markers hidden except where you're editing) or raw Markdown.
     static var rawMode: Bool { get { d.string(forKey: "displayMode") == "raw" } set { d.set(newValue ? "raw" : "formatted", forKey: "displayMode") } }
+    // Sidebar folders: the names in the order they were made (a folder with no notes yet still shows), and which are folded shut.
+    static var folderOrder: [String] { get { d.stringArray(forKey: "folderOrder") ?? [] } set { d.set(newValue, forKey: "folderOrder") } }
+    static var collapsedFolders: [String] { get { d.stringArray(forKey: "collapsedFolders") ?? [] } set { d.set(newValue, forKey: "collapsedFolders") } }
     static var toolsShown: Bool { get { d.object(forKey: "toolsShown") as? Bool ?? true } set { d.set(newValue, forKey: "toolsShown") } }   // formatting bar visible?
 
     // Which action-bar buttons are shown (all on by default).
@@ -108,6 +111,7 @@ func notificationCenter() -> UNUserNotificationCenter? {
 enum JotUI {
     static let headerHeight: CGFloat = 48
     static let toolsHeight: CGFloat = 42
+    static let folderRowHeight: CGFloat = 30       // a folder's header row in the notes list (a note's row is 52)
     static let editorInset = NSSize(width: 22, height: 20)
 
     static func button(_ symbol: String, label: String, target: AnyObject, action: Selector) -> NSButton {
@@ -156,6 +160,7 @@ final class NoteListCell: NSTableCellView {
     let time = NSTextField(labelWithString: "")
     let pinBadge = NSImageView()
     let bellBadge = NSImageView()
+    private var titleLeading: NSLayoutConstraint!       // 12 pt in, or 26 pt inside a folder
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -187,8 +192,9 @@ final class NoteListCell: NSTableCellView {
             addSubview(view)
         }
         textField = title
+        titleLeading = title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12)
         NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLeading,
             title.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             badges.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 6),
             badges.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -206,7 +212,8 @@ final class NoteListCell: NSTableCellView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(title: String, snippet text: String, time when: String, pinned: Bool, reminder: Bool, trashed: Bool) {
+    func configure(title: String, snippet text: String, time when: String, pinned: Bool, reminder: Bool, trashed: Bool, indented: Bool = false) {
+        titleLeading.constant = indented ? 26 : 12
         textField?.stringValue = title
         textField?.font = .systemFont(ofSize: 13, weight: pinned ? .semibold : .medium)
         snippet.stringValue = text
@@ -852,7 +859,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     var statusItem: NSStatusItem!
     var dropdown: NSWindow!
     let store = NotesStore(dir: Runtime.notesDirectory, trashDir: Runtime.trashDirectory)
-    var notes: [URL] = []           // flat list of all note URLs, sorted
+    var notes: [URL] = []           // the notes that have a row in the list (filter applied, collapsed folders left out), in row order
+    var sidebarItems: [SidebarItem] = []   // the table's rows: folder headers and notes. `notes` is this without the headers (Folders.swift)
+    var layout = NoteLibrary.Layout()      // the whole library laid out into folders, before any filter
     var current: URL?
     var currentMeta = NoteMeta()
     var saveWork: DispatchWorkItem?
@@ -882,7 +891,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     var listScroll: NSScrollView!
     let searchField = NSSearchField()
     let filterEmptyLabel = NSTextField(labelWithString: "No matching notes")
-    var allNotes: [URL] = []                // every note, sorted; `notes` is what passes the filter (NoteFilter.swift)
+    var allNotes: [URL] = []                // every note in display order, folded-shut folders included; `notes` is what has a row (NoteFilter.swift)
     var filterText = ""
     var foldedCache: [URL: (date: Date, size: Int, text: String)] = [:]
     var sep: SidebarDivider!
@@ -1185,14 +1194,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     }
     func selectPrevNote() {
         guard !viewingTrash, !notes.isEmpty else { return }
-        let row = tableView.selectedRow
-        let prev = row > 0 ? row - 1 : notes.count - 1
+        let at = noteURL(atRow: tableView.selectedRow).flatMap { notes.firstIndex(of: $0) } ?? -1     // folder headers have no place in the walk
+        let prev = at > 0 ? at - 1 : notes.count - 1
         openOrSelect(notes[prev])
     }
     func selectNextNote() {
         guard !viewingTrash, !notes.isEmpty else { return }
-        let row = tableView.selectedRow
-        let next = row < notes.count - 1 ? row + 1 : 0
+        let at = noteURL(atRow: tableView.selectedRow).flatMap { notes.firstIndex(of: $0) } ?? -1
+        let next = at < notes.count - 1 ? at + 1 : 0
         openOrSelect(notes[next])
     }
     func applyToolsVisibility() {
@@ -1304,24 +1313,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     // MARK: notes list (sidebar — flat, sorted by pin → manual order → newest first)
     func reloadNotes(selectFirst: Bool) {
         rebuildNotes()
-        if notes.isEmpty && !isFiltering {
+        if allNotes.isEmpty {
             do { current = try store.create(); rebuildNotes() }
             catch { showStorageError("A new note could not be created", error: error); return }
         }
         if selectFirst, let first = notes.first { select(first) }
-        else if let c = current, let row = notes.firstIndex(of: c) {
+        else if let c = current, let row = rowIndex(of: c) {
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             tableView.scrollRowToVisible(row)
         }
     }
-    // Pinned notes lead; then notes the user dragged into place (ascending `order`); then everything
-    // else newest-first. Notes with NO manual order sort ABOVE the ordered ones — otherwise, once a
-    // single drag had numbered the whole list, every note created afterwards sank to the bottom.
-    func sortNotes(_ urls: [URL]) -> [URL] {
-        NoteLibrary.sorted(urls.map { u -> NoteLibrary.Entry in
-            let info = noteInfo(u)
-            return NoteLibrary.Entry(url: u, pin: info.meta.pin, order: info.meta.order, modified: info.modified)
-        })
+    // The list's order — pins, then dragged positions, then newest first, within the unfiled notes and within each folder — is
+    // NoteLibrary.layout (see Folders.swift); `noteEntry` is what it reads from a note.
+    func noteEntry(_ u: URL) -> NoteLibrary.Entry {
+        let info = noteInfo(u)
+        return NoteLibrary.Entry(url: u, pin: info.meta.pin, order: info.meta.order, modified: info.modified, folder: info.meta.folder)
     }
     func select(_ url: URL) {
         pendingPick?.cancel()
@@ -1335,7 +1341,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         loadNoteIntoEditor(url)
         restoreViewState(for: url)
         fadeEditorIn()
-        if let row = notes.firstIndex(of: url) {
+        if let row = rowIndex(of: url) {
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             tableView.scrollRowToVisible(row)
         }
@@ -1375,7 +1381,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         guard let nc = noteWindows.first(where: { $0.url == url }) else { select(url); return }
         nc.window.makeKeyAndOrderFront(nil); jotActivate()
         hideTrayUnlessPinned()
-        if let c = current, let row = notes.firstIndex(of: c) { tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        if let c = current, let row = rowIndex(of: c) { tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         else { tableView.deselectAll(nil) }
     }
     func perNoteUndoManager(_ url: URL) -> UndoManager {
@@ -1452,13 +1458,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         saveWork?.cancel()   // cancel pending autosave so it doesn't fire after current is nil
         guard saveCurrent() else { return }
         let selected = tableView.selectedRowIndexes
-        if selected.count > 1 { deleteNotes(selected.compactMap { $0 < notes.count ? notes[$0] : nil }); return }
+        if selected.count > 1 { deleteNotes(noteURLs(atRows: Array(selected))); return }
         // Prefer current; fall back to the selected row.
         var u: URL? = current
-        if u == nil {
-            let row = tableView.selectedRow
-            if row >= 0, row < notes.count { u = notes[row] }
-        }
+        if u == nil { u = noteURL(atRow: tableView.selectedRow) }
         guard let target = u else { return }
         deleteNotes([target])
     }
@@ -1519,12 +1522,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         guard menu === tableView.menu, !viewingTrash else { return }
         menu.removeAllItems()
         let row = tableView.clickedRow, selected = tableView.selectedRowIndexes
+        if let folder = folderName(atRow: row) { populateFolderMenu(menu, folder: folder); return }
         let rows = row >= 0 ? (selected.contains(row) && selected.count > 1 ? Array(selected).sorted() : [row]) : []
         populateListMenu(menu, rows: rows)
     }
     func populateListMenu(_ menu: NSMenu, rows: [Int]) {
-        let urls = rows.compactMap { $0 < notes.count ? notes[$0] : nil }
-        guard !urls.isEmpty else { return }
+        let urls = noteURLs(atRows: rows)
+        guard !urls.isEmpty else {                                     // empty space below the rows
+            if !viewingTrash && !isFiltering { addNewFolderItem(to: menu) }
+            return
+        }
         let many = urls.count > 1
         let metas = urls.map { noteInfo($0).meta }
         let allPinned = metas.allSatisfy { $0.pin }
@@ -1539,6 +1546,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
             add(has ? "Change Reminder…" : "Remind Me…", has ? "bell.fill" : "bell", #selector(setReminderForClickedNote))
             if has { add("Clear Reminder", "bell.slash", #selector(clearReminderForClickedNote)) }
         }
+        addFolderItem(to: menu, urls: urls)
         menu.addItem(.separator())
         add(many ? "Delete \(urls.count) Notes" : "Delete Note", "trash", #selector(deleteClickedNote))
         menu.addItem(.separator())
@@ -1547,9 +1555,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     @objc func deleteClickedNote() {
         let row = tableView.clickedRow
         let selected = tableView.selectedRowIndexes
-        if selected.contains(row) && selected.count > 1 { deleteNotes(selected.compactMap { $0 < notes.count ? notes[$0] : nil }); return }
-        guard row >= 0, row < notes.count else { return }
-        deleteNotes([notes[row]])
+        if selected.contains(row) && selected.count > 1 { deleteNotes(noteURLs(atRows: Array(selected))); return }
+        guard let url = noteURL(atRow: row) else { return }
+        deleteNotes([url])
     }
     // Save any detached editor before moving its file. Update UI and close editors only after the
     // recoverable move succeeds; a failed move keeps both the original and its editing session.
@@ -1571,10 +1579,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     @objc func openNoteWindow() {
         guard !viewingTrash else { return }
         let clicked = tableView.clickedRow
-        guard clicked >= 0, clicked < notes.count else { return }
+        guard noteURL(atRow: clicked) != nil else { return }
         let sel = tableView.selectedRowIndexes
         let rows = (sel.contains(clicked) && sel.count > 1) ? Array(sel) : [clicked]
-        for row in rows { if row < notes.count { openWindow(for: notes[row]) } }
+        for url in noteURLs(atRows: rows) { openWindow(for: url) }
         jotActivate()
     }
     // Opens (or re-focuses) an undocked window for a note. Returns the controller.
@@ -1607,7 +1615,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     // (one editor per note), so there is nothing to mirror.
     func refreshRowIfVisible(for url: URL) {
         infoCache[url] = nil
-        let row = notes.firstIndex(of: url) ?? -1
+        let row = rowIndex(of: url) ?? -1
         if row >= 0 { tableView.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0)) }
     }
 
@@ -1678,29 +1686,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         store.deletePermanently(trashed[row]); trashed.remove(at: row); tableView.reloadData()
     }
 
-    private func refreshSidebarKeepingSelection() {
+    func refreshSidebarKeepingSelection() {
         guard !viewingTrash else { return }
         let keep = current
         rebuildNotes()
-        if let c = keep, let row = notes.firstIndex(of: c) {
+        if let c = keep, let row = rowIndex(of: c) {
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 
     // MARK: NSTableView data source + delegate
-    func numberOfRows(in tableView: NSTableView) -> Int { viewingTrash ? trashed.count : notes.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { viewingTrash ? trashed.count : sidebarItems.count }
+    func tableView(_ t: NSTableView, heightOfRow row: Int) -> CGFloat { folderName(atRow: row) == nil ? t.rowHeight : JotUI.folderRowHeight }
+    // Folder headers fold and unfold on a click (NoteTableView); they are never "the open note".
+    func tableView(_ t: NSTableView, shouldSelectRow row: Int) -> Bool { folderName(atRow: row) == nil }
     func tableView(_ t: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if let name = folderName(atRow: row) { return folderHeaderCell(t, name: name) }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = t.makeView(withIdentifier: id, owner: self) as? NoteListCell ?? {
             let c = NoteListCell(frame: .zero); c.identifier = id
             return c
         }()
-        let list = viewingTrash ? trashed : notes
-        guard row < list.count else { return cell }
-        let url = list[row]
+        let url: URL
+        if viewingTrash { guard row >= 0, row < trashed.count else { return cell }; url = trashed[row] }
+        else { guard let u = noteURL(atRow: row) else { return cell }; url = u }
         let info = noteInfo(url)
         cell.configure(title: info.title, snippet: info.snippet, time: RelativeTime.short(info.modified),
-                       pinned: !viewingTrash && info.meta.pin, reminder: !viewingTrash && info.meta.reminder != nil, trashed: viewingTrash)
+                       pinned: !viewingTrash && info.meta.pin, reminder: !viewingTrash && info.meta.reminder != nil, trashed: viewingTrash,
+                       indented: !viewingTrash && !NoteLibrary.folder(atRow: row, in: sidebarItems).isEmpty)
         return cell
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -1714,8 +1727,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
             if let ts = textView.textStorage { mdStyler?.styleAll(ts) }
             return
         }
-        guard row >= 0, row < notes.count, notes[row] != current else { return }
-        let url = notes[row]
+        guard let url = noteURL(atRow: row), url != current else { return }
         if let e = NSApp.currentEvent, e.type == .keyDown, e.isARepeat {            // holding ↑/↓: load the note you stop on, not every one you pass
             pendingPick?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.openOrSelect(url) }
@@ -1728,10 +1740,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
 
     // Context menu actions (operate on the right-clicked row via tableView.clickedRow)
     @objc func toggleClickedNotePin() {
-        let row = tableView.clickedRow; guard row >= 0, row < notes.count else { return }
+        let row = tableView.clickedRow; guard noteURL(atRow: row) != nil else { return }
         let selected = tableView.selectedRowIndexes
         let rows = selected.contains(row) && selected.count > 1 ? Array(selected) : [row]
-        let urls = rows.compactMap { $0 < notes.count ? notes[$0] : nil }
+        let urls = noteURLs(atRows: rows)
         let makePinned = !urls.allSatisfy { noteInfo($0).meta.pin }       // all pinned → unpin them; otherwise pin them all
         for url in urls {
             var meta = store.readMeta(url); meta.pin = makePinned; store.writeMeta(meta, to: url)
@@ -1741,13 +1753,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         refreshSidebarKeepingSelection()
     }
     @objc func setReminderForClickedNote() {
-        let row = tableView.clickedRow; guard row >= 0, row < notes.count else { return }
-        select(notes[row])
+        guard let url = noteURL(atRow: tableView.clickedRow) else { return }
+        select(url)
         if let anchor = moreButton { showReminderPopover(anchor) }
     }
     @objc func clearReminderForClickedNote() {
-        let row = tableView.clickedRow; guard row >= 0, row < notes.count else { return }
-        let url = notes[row]
+        guard let url = noteURL(atRow: tableView.clickedRow) else { return }
         var meta = store.readMeta(url); meta.reminder = nil; store.writeMeta(meta, to: url)
         cancelReminder(for: url)
         if url == current { currentMeta = meta; updateHeaderBadges() }
@@ -1756,14 +1767,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
     // MARK: Drag-and-drop reorder (NSTableView)
     func tableView(_ t: NSTableView, writeRowsWith rowIndexes: IndexSet, to pboard: NSPasteboard) -> Bool {
         guard !isFiltering else { return false }          // a position in a partial list means nothing
-        guard !viewingTrash, let first = rowIndexes.first, first < notes.count else { return false }
-        pboard.setString(notes[first].path, forType: .fileURL)
+        guard !viewingTrash, let first = rowIndexes.first, let dragged = noteURL(atRow: first) else { return false }
+        pboard.setString(dragged.path, forType: .fileURL)
         pboard.setString(String(first), forType: .string)
         return true
     }
+    // A drop is a move: onto a folder's header it files the note there; between rows it puts the note in that gap's group (Folders.swift).
     func tableView(_ t: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
-        guard !viewingTrash else { return [] }
-        return op == .above ? .move : []
+        guard !viewingTrash, let target = NoteLibrary.dropTarget(row: row, onRow: op == .on, items: sidebarItems, collapsed: collapsedFolderSet) else { return [] }
+        if op == .on, case .group = target { t.setDropRow(row, dropOperation: .above) }         // a note row is never dropped ON, only between
+        return .move
     }
     func tableView(_ t: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation op: NSTableView.DropOperation) -> Bool {
         guard !viewingTrash, let pbItem = info.draggingPasteboard.pasteboardItems?.first,
@@ -1771,23 +1784,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         // The pasteboard carries a plain POSIX path — URL(string:) returns nil on the space in
         // "Application Support", which used to make every drop silently fail.
         let src = URL(fileURLWithPath: path)
-        guard let srcIdx = notes.firstIndex(of: src) else { return false }
-        var list = notes.filter { $0 != src }
-        // `row` is in pre-removal coordinates: dropping below the dragged row shifts everything up one.
-        let insertAt = min(max(row > srcIdx ? row - 1 : row, 0), list.count)
-        list.insert(src, at: insertAt)
-        for (i, u) in list.enumerated() {
-            var meta = store.readMeta(u)
-            guard meta.order != i + 1 else { continue }   // only rewrite what actually moved
-            meta.order = i + 1
-            writeMetaPreservingDate(meta, to: u)
-        }
-        refreshSidebarKeepingSelection()
+        guard notes.contains(src),
+              let target = NoteLibrary.dropTarget(row: row, onRow: op == .on, items: sidebarItems, collapsed: collapsedFolderSet) else { return false }
+        dropNote(src, onto: target)
         return true
     }
     // Frontmatter-only edits shouldn't make a note look freshly modified — that would reshuffle the
     // date-sorted part of the list every time you drag a row or clear the manual order.
-    private func writeMetaPreservingDate(_ meta: NoteMeta, to u: URL) {
+    func writeMetaPreservingDate(_ meta: NoteMeta, to u: URL) {
         let mod = store.modificationDate(u)
         store.writeMeta(meta, to: u)
         if let mod { try? FileManager.default.setAttributes([.modificationDate: mod], ofItemAtPath: u.path) }
@@ -1947,7 +1951,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
             return false
         }
         infoCache[u] = nil                         // we just wrote it: whatever was cached for its row and title is stale
-        if reloadRow { let r = notes.firstIndex(of: u) ?? -1; if r >= 0 { tableView.reloadData(forRowIndexes: IndexSet(integer: r), columnIndexes: IndexSet(integer: 0)) }; refreshHeaderTitle() }
+        if reloadRow { let r = rowIndex(of: u) ?? -1; if r >= 0 { tableView.reloadData(forRowIndexes: IndexSet(integer: r), columnIndexes: IndexSet(integer: 0)) }; refreshHeaderTitle() }
         return true
     }
     func applyFontSize() {
@@ -1976,6 +1980,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableVie
         menu.addItem(.separator())
         item("New Note from Clipboard", "doc.on.clipboard", #selector(captureClipboard))
         item("Open in New Window", "macwindow", #selector(openCurrentInNewWindow))
+        if !viewingTrash, let shown = current { addFolderItem(to: menu, urls: [shown]) }
         menu.addItem(.separator())
         item("Delete Note", "trash", #selector(deleteCurrentNote))
         item(viewingTrash ? "Back to Notes" : "Recently Deleted", "trash.circle", #selector(showRecentlyDeleted))

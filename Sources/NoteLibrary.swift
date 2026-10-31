@@ -11,6 +11,7 @@ enum NoteLibrary {
         let pin: Bool
         let order: Int          // manual position; 0 = never dragged
         let modified: Date
+        var folder: String = ""   // "" = not in a folder
     }
 
     // Pinned notes lead; then notes with NO manual order, newest first; then the notes you dragged into
@@ -119,5 +120,138 @@ enum ListDiff {
         for i in change.removed.reversed() { result.remove(at: i) }
         for j in change.inserted { result.insert(new[j], at: j) }
         return result
+    }
+}
+
+// ============================================================================
+// Folders — notes are grouped in the sidebar by the `folder:` frontmatter key. The files stay flat in one directory (so Obsidian-style
+// tools, search and sync keep working); a folder is just a name that notes share. Everything here is pure so test.sh can pin it down.
+// ============================================================================
+
+// A folder name as it is stored and shown: control characters and line breaks become spaces, `"` becomes `'` and `\` becomes `/`
+// (the name is written as a double-quoted YAML scalar, and Jot's own reader does no unescaping), trimmed and capped at 60 characters.
+enum FolderNames {
+    static let maxLength = 60
+    static func clean(_ raw: String) -> String {
+        var out = ""
+        for scalar in raw.unicodeScalars {
+            if scalar == "\"" { out.append("'") }
+            else if scalar == "\\" { out.append("/") }
+            else if CharacterSet.controlCharacters.contains(scalar) || CharacterSet.newlines.contains(scalar) { out.append(" ") }
+            else { out.unicodeScalars.append(scalar) }
+        }
+        out = out.trimmingCharacters(in: .whitespaces)
+        if out.count > maxLength { out = String(out.prefix(maxLength)).trimmingCharacters(in: .whitespaces) }
+        return out
+    }
+    // The existing folder a typed name refers to (case- and accent-insensitive), so "work" files into "Work" instead of making a twin.
+    static func existing(_ name: String, in names: [String]) -> String? {
+        names.first { $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+    }
+}
+
+// One row of the sidebar: a folder's header, or a note.
+enum SidebarItem: Equatable {
+    case folder(String)
+    case note(URL)
+}
+
+extension NoteLibrary {
+    struct Layout {
+        var items: [SidebarItem] = []     // the table's rows, top to bottom
+        var notes: [URL] = []             // the notes that have a row (a collapsed folder's notes don't), in row order
+        var all: [URL] = []               // every note in display order, collapsed folders included
+        var folders: [String] = []        // every folder, in display order
+        var counts: [String: Int] = [:]   // notes per folder, collapsed or not
+    }
+
+    // Unfiled notes first (pinned → manual order → newest, as ever), then each folder: its header, then its notes in the same order.
+    // `folderOrder` is the order folders were made in; a folder only some note names (edited outside Jot) follows them alphabetically.
+    // A folder in `collapsed` keeps its header and its count but lists no notes. With no folders at all this is just `sorted`.
+    static func layout(_ entries: [Entry], folderOrder: [String], collapsed: Set<String>) -> Layout {
+        var unfiled: [Entry] = []
+        var filed: [String: [Entry]] = [:]
+        for e in entries {
+            if e.folder.isEmpty { unfiled.append(e) } else { filed[e.folder, default: []].append(e) }
+        }
+        var names: [String] = []
+        var seen = Set<String>()
+        for n in folderOrder where !n.isEmpty && seen.insert(n).inserted { names.append(n) }
+        names += filed.keys.filter { !seen.contains($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+        var out = Layout()
+        out.folders = names
+        let top = sorted(unfiled)
+        out.items += top.map { SidebarItem.note($0) }
+        out.notes += top
+        out.all += top
+        for name in names {
+            let group = sorted(filed[name] ?? [])
+            out.counts[name] = group.count
+            out.items.append(.folder(name))
+            out.all += group
+            if !collapsed.contains(name) {
+                out.items += group.map { SidebarItem.note($0) }
+                out.notes += group
+            }
+        }
+        return out
+    }
+
+    // The folder a row belongs to: its own name for a header, otherwise the nearest header above it ("" above the first one).
+    static func folder(atRow row: Int, in items: [SidebarItem]) -> String {
+        var i = min(row, items.count - 1)
+        while i >= 0 {
+            if case .folder(let name) = items[i] { return name }
+            i -= 1
+        }
+        return ""
+    }
+    // The notes listed under a folder ("" = the unfiled ones), top to bottom.
+    static func notes(inFolder folder: String, items: [SidebarItem]) -> [URL] {
+        var current = ""
+        var out: [URL] = []
+        for item in items {
+            switch item {
+            case .folder(let name): current = name
+            case .note(let url): if current == folder { out.append(url) }
+            }
+        }
+        return out
+    }
+
+    // Where a drag lands. Dropping ON a folder header files the note there; dropping between rows puts it in the group that gap is in,
+    // before the note below it. The gap above a header belongs to the end of the group above it. A collapsed folder can't show a position, so
+    // it simply takes the note.
+    enum DropTarget: Equatable {
+        case into(String)
+        case group(String, before: URL?)
+    }
+    static func dropTarget(row: Int, onRow: Bool, items: [SidebarItem], collapsed: Set<String>) -> DropTarget? {
+        if onRow {
+            guard row >= 0, row < items.count else { return nil }
+            if case .folder(let name) = items[row] { return .into(name) }
+        }
+        guard row >= 0 else { return nil }
+        var group = ""
+        var before: URL? = nil
+        if row >= items.count {
+            group = items.isEmpty ? "" : folder(atRow: items.count - 1, in: items)
+        } else {
+            switch items[row] {
+            case .note(let url): group = folder(atRow: row, in: items); before = url
+            case .folder: group = row == 0 ? "" : folder(atRow: row - 1, in: items)
+            }
+        }
+        if !group.isEmpty, collapsed.contains(group) { return .into(group) }
+        return .group(group, before: before)
+    }
+    // The group's notes with `moving` taken out and put back before `before` (at the end when nil). Dropping a note on its own gap changes nothing.
+    static func reordered(_ group: [URL], moving: URL, before: URL?) -> [URL] {
+        if before == moving { return group }
+        var list = group.filter { $0 != moving }
+        let at = before.flatMap { list.firstIndex(of: $0) } ?? list.count
+        list.insert(moving, at: at)
+        return list
     }
 }

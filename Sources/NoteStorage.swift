@@ -10,6 +10,7 @@ let jotDir = FileManager.default.homeDirectoryForCurrentUser
 //   ---
 //   pin: true
 //   order: 3
+//   folder: "Work"
 //   reminder: 2026-07-15T09:00:00Z
 //   ---
 // Notes without frontmatter use defaults. read() strips it; write() keeps it.
@@ -18,12 +19,13 @@ let jotDir = FileManager.default.homeDirectoryForCurrentUser
 // `aliases:`, YAML lists, comments, blank lines, nested maps — belongs to the author and is carried
 // through every save untouched: writes PATCH the original lines (see `formatFrontmatter`) rather than
 // regenerating the block from the known fields.
-let jotFrontmatterKeys = ["pin", "priority", "order", "textColor", "reminder", "rtfMode"]
+let jotFrontmatterKeys = ["pin", "priority", "order", "folder", "textColor", "reminder", "rtfMode"]
 
 struct NoteMeta {
     var pin: Bool = false
     var priority: Int = 0       // 0=none, 1=high, 2=medium, 3=low (no longer shown in the UI; kept so nothing is lost)
-    var order: Int = 0          // manual sort position
+    var order: Int = 0          // manual sort position (within the note's folder, or among the unfiled notes)
+    var folder: String = ""     // sidebar folder the note is filed in; "" = not in a folder (always written quoted: see canonicalLine)
     var textColor: String = ""  // hex, "" = default (no longer shown in the UI; kept so nothing is lost)
     var reminder: Date? = nil
     var rtfMode: Bool = false   // legacy rich-text note: its body is base64 RTF until it is converted to Markdown
@@ -46,7 +48,7 @@ struct NoteMeta {
     // sort position doesn't make an otherwise-empty note worth keeping (see AppDelegate.isBlankNote).
     // Hand-written frontmatter counts: a note carrying it is never swept as an empty scratch note.
     var isDecorated: Bool {
-        pin || priority > 0 || !textColor.isEmpty || reminder != nil || rtfMode || hasForeignContent
+        pin || priority > 0 || !folder.isEmpty || !textColor.isEmpty || reminder != nil || rtfMode || hasForeignContent
     }
     var hasContent: Bool { isDecorated || order > 0 }
 }
@@ -80,6 +82,7 @@ private func apply(_ key: String, _ rawValue: String, to meta: inout NoteMeta) {
     case "pin":       meta.pin = value.lowercased() == "true"
     case "priority":  meta.priority = Int(value) ?? 0
     case "order":     meta.order = Int(value) ?? 0
+    case "folder":    meta.folder = FolderNames.clean(value)
     case "textColor": meta.textColor = value
     case "reminder":  meta.reminder = metaDateFormatter.date(from: value)
     case "rtfMode":   meta.rtfMode = value.lowercased() == "true"
@@ -93,6 +96,7 @@ private func canonicalLine(_ key: String, _ m: NoteMeta) -> String? {
     case "pin":       return m.pin ? "pin: true" : nil
     case "priority":  return m.priority > 0 ? "priority: \(m.priority)" : nil
     case "order":     return m.order > 0 ? "order: \(m.order)" : nil
+    case "folder":    return m.folder.isEmpty ? nil : "folder: \"\(m.folder)\""
     case "textColor": return m.textColor.isEmpty ? nil : "textColor: \"\(m.textColor)\""
     case "reminder":  return m.reminder.map { "reminder: \(metaDateFormatter.string(from: $0))" }
     case "rtfMode":   return m.rtfMode ? "rtfMode: true" : nil
